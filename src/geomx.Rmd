@@ -1,0 +1,385 @@
+---
+title: "Analyzing GeoMx-NGS Protein Expression Data with GeomxTools"
+output:
+    BiocStyle::html_document:
+        toc: false
+        number_sections: false
+        highlight: tango
+        fig_caption: yes
+
+fontsize:       12pt
+---
+
+```{r libs,include=FALSE, warning=FALSE, message=TRUE}
+library(readxl)
+library(tidyverse)
+library(ggpubr)
+library(ggplot2)
+library(reshape2)
+#library(dplyr)
+library(openxlsx)
+```
+
+## Filter ROIs with low signal 
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+datam <- read_excel("../data/InitialDataset.xlsx")[33:97,]
+colnames(datam)[1:4] <- c("TargetGroup","Type","Group","TargetName")
+#datam %>% filter(TargetName != "HYB-NEG") %>% select(-low_targets$ID)
+
+proteinInfo <- datam[,1:4] 
+sampleInfo <- read_excel("../data/Annotation_template_file.xlsx")
+sampleInfo <- data.frame(sampleInfo[,c(17,18)], sampleInfo[,c(6:12)])
+sampleInfo$ID <- paste(sampleInfo$Scan_ID, sampleInfo$ROI_ID, "Full ROI", sep=" | ")
+sampleInfo$TrtID <- paste(sampleInfo$Scan_ID,sampleInfo$Treatment, sep = "_")
+sampleInfo$Group <- sampleInfo$Treatment
+sampleInfo$Treatment <- gsub("F12|M12|F3|M3", "", sampleInfo$Treatment)
+
+proteinInfo <- proteinInfo %>% filter(TargetName != "HYB-NEG")
+
+
+# Function to compute geometric mean
+geo_mean <- function(x) {
+ exp(mean(log(x))) 
+}
+
+geoMxData <- datam[,5:ncol(datam)] %>% mutate(across(c(1:288), as.numeric))
+rownames(geoMxData) <- datam$TargetName
+
+housekeeping <- proteinInfo[proteinInfo$Group=="Control",]
+igg <- proteinInfo[proteinInfo$Group=="Negative",] 
+housekeeping_genes <- housekeeping$TargetName
+igg_genes <- igg$TargetName
+endo <- proteinInfo$TargetName[proteinInfo$Group == "Endogenous"]
+
+qc_plot <- data.frame("ID"=colnames(geoMxData))
+qc_plot$geomean_hk <- apply(geoMxData[housekeeping_genes, ], 2, geo_mean)
+qc_plot$geomean_igg <- apply(geoMxData[igg_genes, ], 2, geo_mean)
+qc_plot$log2_geomean_hk <- log2(qc_plot$geomean_hk)
+qc_plot$log2_geomean_igg <- log2(qc_plot$geomean_igg)
+```
+
+First, we filtered 7 ROIs with low signals of housekeeping genes which geometric mean are lower than 4.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+low_targets <- qc_plot[qc_plot$log2_geomean_hk<4, ]
+qc_plot_filtered <- qc_plot[qc_plot$log2_geomean_hk>=4,]
+sampleInfo <- sampleInfo %>% filter(!ID %in% low_targets$ID)
+
+qc_plot_filtered <- merge(qc_plot_filtered, sampleInfo)
+
+p1<-ggplot(qc_plot_filtered, aes(x=log2_geomean_hk))+
+  geom_histogram(bins = 30, fill = "grey", color = "black", alpha = 0.6)
+p2 <- ggplot(data = qc_plot_filtered,aes(x=reorder(ID,log2_geomean_hk),y=log2_geomean_hk, fill=Location))+
+  geom_col(alpha = 0.6)+
+  theme_classic() +
+  labs(x =  element_blank(),y = "Log2 Geomean HK")+
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+p3 <- ggplot(data = qc_plot_filtered, aes(x=reorder(ID,log2_geomean_hk),y=log2_geomean_hk, fill =Treatment))+
+  geom_col(alpha = 0.6)+
+  theme_classic() +
+  labs(x =  element_blank(),y = "Log2 Geomean HK")+
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+ggarrange(p1, p2, p3, nrow = 3)
+#ggsave("report/HkNormalization/figure1_0617.png")
+```
+Then we also calculated the geometric mean of IgG signals in each ROI.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+p4<-ggplot(data = qc_plot_filtered,aes(x=log2_geomean_igg))+
+  geom_histogram(bins = 30, fill = "grey", color = "black", alpha = 0.6)
+p5<-ggplot(data = qc_plot_filtered,aes(x=reorder(ID,log2_geomean_igg),y=log2_geomean_igg, fill=Location))+
+  geom_col(alpha = 0.6) +
+  theme_classic() +
+  labs(x =  element_blank(),y = "Log2 Geomean IgG")+
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+p6 <- ggplot(data = qc_plot_filtered, aes(x=reorder(ID,log2_geomean_igg),y=log2_geomean_igg, fill =Treatment))+
+  geom_col(alpha = 0.6)+
+  theme_classic() +
+  labs(x =  element_blank(),y = "Log2 Geomean IgG") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+ggarrange(p4,p5,p6, nrow = 3)
+#ggsave("report/HkNormalization/figure2_0617.png")
+```
+
+According to the correlation between housekeeping and IgG background signal are concordant with each other.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+p7<-ggplot(data = qc_plot_filtered,aes(x=log2_geomean_hk,y=log2_geomean_igg,color=Location))+
+  geom_point(size=4,alpha=0.7)+
+  theme_classic()+
+  labs(x= "Housekeeper Geomean", y = "IgG Geomean")
+p8<-ggplot(data = qc_plot_filtered,aes(x=log2_geomean_hk,y=log2_geomean_igg,color=Treatment))+
+  geom_point(size=4,alpha=0.7)+
+  theme_classic()+
+  labs(x= "Housekeeper Geomean", y = "IgG Geomean")
+ggarrange(p7,p8,ncol=2)
+#ggsave("report/HkNormalization/figure3_0617.png",width = 16, height = 8)
+
+```
+
+
+## Filter proteins with low signal 
+
+We computed the signal-to-background ratio per target, which is simply each ROI’s data divided by its IgG geomean.
+And we removed 26 targets with lower signals than the control group in the ROIs.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+geoMxFilteredData <- geoMxData %>% select(-low_targets$ID) %>% filter(!row.names(geoMxData) %in% "HYB-NEG")
+normalized_data_igg <- sweep(geoMxFilteredData, 2, qc_plot_filtered$geomean_igg, FUN = "/")
+log2_normalized_data <- apply(normalized_data_igg, 2, function(x) log2(x) )
+rownames(log2_normalized_data) <- proteinInfo$TargetName
+boxplot_iggratio <- melt(log2_normalized_data)
+colnames(boxplot_iggratio)[1]<-"TargetName"
+boxplot_iggratio <- merge(boxplot_iggratio, proteinInfo[3:4])
+ggplot(boxplot_iggratio, aes(x = reorder(TargetName, value), y = value, color=Group)) +
+  geom_boxplot(lwd=0.4, outlier.size = 0.5, alpha = 0.6) +
+  geom_hline(yintercept = 0, size=0.2)+
+  theme_classic() +
+  labs(x = element_blank(),
+       y = "Log2 Signal to IgG ratio") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank())
+#ggsave("report/HkNormalization/figure4_0617.png")
+```
+
+## Data normalization (Housekeeping proteins)
+
+
+We finally chose the housekeeping normalization for data normalization. 
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+normalized_data <- sweep(geoMxFilteredData, 2, qc_plot_filtered$geomean_hk, FUN = "/")
+log_normalized_data <- apply(as.data.frame(normalized_data), 2, function(x) log2(x))
+standardized_data <- as.data.frame(scale(log_normalized_data)) 
+
+rownames(log_normalized_data) <- proteinInfo$TargetName
+boxplot_hkratio <- melt(log_normalized_data)
+colnames(boxplot_hkratio)[1] <- "TargetName"
+
+boxplot_hkratio <- merge(boxplot_hkratio, proteinInfo[3:4])
+
+ggplot(boxplot_hkratio, aes(x = reorder(TargetName, value), y = value, color=Group)) +
+  geom_boxplot(lwd=0.4, outlier.size = 0.5, alpha = 0.6) +
+  geom_hline(yintercept = 0, size=0.2)+
+  theme_classic() +
+  labs(x = element_blank(),
+       y = "Log2 Signal to HK ratio") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid = element_blank())
+
+#ggsave("normailized_plot.png", height = 8, width = 10)
+```
+
+## PCA of normalized data
+
+After the data normalization and the low targets removal, we tested the correlation between each ROIs.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+rownames(standardized_data)<-proteinInfo$TargetName
+
+t<-data.frame(t(standardized_data))
+colnames(t) <- proteinInfo$TargetName
+
+corr_plot<- rownames_to_column(t,"ID")
+corr_plot<-merge(corr_plot, sampleInfo)
+corr_plot$Location <- factor(corr_plot$Location)
+corr_plot$Treatment <- factor(corr_plot$Treatment)
+group_color1 <- c( "#FF7F00", "#0072B2")
+group_color2 <- c( "#E41A1C","#999999", "#984EA3")
+col1 <- group_color1[corr_plot$Location]
+col2 <- group_color2[corr_plot$Treatment]
+
+pca_data <- rownames_to_column(t,"ID")
+pca_data <-  merge(pca_data, sampleInfo)
+## PCA all Endogenous ##
+pca <- prcomp(pca_data[,endo],scale. = TRUE)
+pca_variance <- summary(pca)$importance[2,]
+plot(pca_variance)
+p <- cbind(pca_data, pca$x[,1:5])
+rownames(p) <- p$ID
+
+
+library(GGally)
+ggpairs(p, columns=c("PC1","PC2","PC3","PC4","PC5"),
+        aes(colour = Treatment, alpha = 0.5))+
+  theme(panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank())+
+  theme_bw()
+#ggsave("report/HkNormalization/PCAbyTreatment_0617.png")
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+order <- reorder(boxplot_hkratio$TargetName,boxplot_hkratio$value)
+rm1 <- levels(order)[22:64]
+rm2 <- levels(order)[26:64]
+pca1 <- prcomp(pca_data[,rm1],scale. = TRUE)
+pca_scores <- pca1$x[,1:5]
+colnames(pca_scores) <- paste0("PC", 1:5)
+
+p1 <- cbind(pca_data, pca1$x[,1:5])
+rownames(p1) <- p1$ID
+ggpairs(p1, columns=c("PC1","PC2","PC3","PC4","PC5"),
+        aes(colour = Treatment, alpha = 0.5))+
+  theme(panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank())+
+  theme_bw()
+#ggsave("report/HkNormalization/PCAbyTreatment_rm1_0617.png")
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+pca2 <- prcomp(pca_data[,rm2],scale. = TRUE)
+p2 <- cbind(pca_data, pca2$x[,1:5])
+rownames(p2) <- p2$ID
+ggpairs(p2, columns=c("PC1","PC2","PC3","PC4","PC5"),
+        aes(colour = Treatment, alpha = 0.5))+
+  theme(panel.grid.minor = element_blank(), 
+        panel.grid.major = element_blank())+
+  theme_bw()
+#ggsave("report/HkNormalization/PCAbyTreatment_rm2_0617.png")
+
+```
+
+## Differential signals comparison
+```{r Differential protein comparison, warning=FALSE, message=FALSE}
+
+DEAnalysis <- function(g1, g2, loc){   
+   
+    dge <- as.data.frame(normalized_data)
+    rownames(dge)<-proteinInfo$TargetName
+
+    dge <- dge[rm2,]
+    
+    targets <- data.frame(sampleID=sampleInfo$ID, treatmentID=sampleInfo$TrtID, group=sampleInfo$Group, location=sampleInfo$Location)
+    targets <- targets[targets$group %in% c(g1,g2) & targets$location==loc,]
+    group <- factor(targets$group,levels = levels(factor(targets$group)))
+    treatmentID <- factor(targets$treatmentID,levels = levels(factor(targets$treatmentID)))
+    location <- factor(targets$location,levels = levels(factor(targets$location)))
+    
+    #write.table(targets, paste(g1,g2,format(Sys.Date(),"%m%d"),"targets.txt",sep ="_"), sep = "\t", quote = F, row.names = F)
+    dge <- dge[, targets$sampleID]
+    
+    trtID <- unique(treatmentID)
+    dge_geometric<-dge
+
+    for (i in 1:length(trtID) ) {
+      geo_col <- dge[,treatmentID == trtID[i]]
+      colname <- as.character(trtID[i])
+    
+      if(!is.data.frame(geo_col)) {
+        dge_geometric[[colname]] <- geo_col}
+      
+      if(is.data.frame(geo_col)) { 
+        dge_geometric[[colname]] <- apply(geo_col, 1, function(x) geo_mean(x)) }
+    }
+
+    dge_geometric <- dge_geometric[,-c(1:ncol(dge))]
+    
+    sinfo <- unique(targets[,-1])
+    group <- factor(sinfo$group, levels =levels(factor(sinfo$group)))
+    
+    dge_melt <- melt(rownames_to_column(dge))
+    colnames(dge_melt)[1:2] <- c("TargetName","sampleID")
+    dge_melt <- merge(dge_melt, targets)
+    
+    dge_geometric_melt <- melt(rownames_to_column(dge_geometric))
+    colnames(dge_geometric_melt) <- c("TargetName","treatmentID","geometric_mean")
+
+    dge_combined <- merge(dge_melt,dge_geometric_melt)
+    dge_combined$log2_geometric_mean <- log2(dge_combined$geometric_mean)
+    ttest <- unique(dge_combined[,-c(3,4)])
+    
+    output <- data.frame(TargetName=character(), FC=numeric(), logFC=numeric(), P_value =numeric(), FDR=numeric())
+    for (protein in rm2){
+      df_t <- ttest[ttest$TargetName==protein,]
+      ttest_results <- t.test(log2_geometric_mean~group, data = df_t)
+      
+      logfc <- as.numeric(ttest_results$estimate[2] - ttest_results$estimate[1])
+      fc <- 2^logfc
+      pvalue <- ttest_results$p.value
+      fdr <- p.adjust(pvalue, method = "BH")
+      res <- data.frame(protein,fc,logfc,pvalue,fdr)
+      output <- rbind(output,res)
+    }
+    
+    # design <- model.matrix(~ group)
+    # fit <- lmFit(dge_geometric, design)
+    # fit <- eBayes(fit)
+    # results <- topTable(fit, number=nrow(dge_geometric), adjust="BH")
+    # results$FC <- 2^results$logFC
+    # results$FDR <- results$adj.P.Val
+    # 
+    # res_df <- as.data.frame(results)[,c("P.Value","FC","logFC","FDR")]
+    # res_df$TargetName <- rownames(res_df)
+    # dge$TargetName <- rownames(dge)
+    # res_df <- merge(res_df,dge,by="TargetName")
+    # res_df <- merge(proteinInfo[3:4],res_df)
+    
+    colnames(output) <- c("TargetName", "FC", "logFC", "p_value", "FDR")
+    
+    output <- merge(output, rownames_to_column(dge_geometric,"TargetName"))
+
+    #top5significant <- output$TargetName
+    top5significant <- output$TargetName[order(output$FDR)][1:5]
+    for (protein in top5significant){
+      box_plt <- dge_combined[dge_combined$TargetName==protein,]
+      box_plt$log2_value <- log2(box_plt$value)
+      
+      ggplot(box_plt, aes(x = group, y = log2_value, color=treatmentID))+
+      geom_boxplot(lwd=0.4, outlier.size = 0.5, alpha = 0.6) +
+      theme_classic() +
+      labs(x = protein)
+
+      ggsave(paste0("../report/results/",g1,"_vs_",g2,"_",loc,"/",protein,"_boxplot.png"), create.dir = TRUE)
+    }
+
+    
+    return(output)
+}
+```
+
+We performed the comparisons in M12, F12, M3, and F3, within the Hip and Non_hip respectively.
+
+* L vs. C
+* LPE vs. L
+* LPG vs. L
+* LPG vs. LPE
+
+
+
+
+```{r output results, warning=FALSE, message=FALSE, echo=FALSE}
+loc <-'Non_hip'
+res1 <- DEAnalysis("M3L", "M3C", loc)
+res2 <- DEAnalysis("M3LPE", "M3L", loc)
+res3 <- DEAnalysis("M3LPG", "M3L", loc)
+res4 <- DEAnalysis("M3LPG", "M3LPE", loc)
+#targets1 <- DEAnalysis("M3LPG", "M3C", "Hip")$targets
+
+wb <- createWorkbook()
+
+# Add a worksheet to the workbook
+addWorksheet(wb, "M3L_vs_M3C_Non_Hip")
+addWorksheet(wb, "M3LPE_vs_M3L_Non_Hip")
+addWorksheet(wb, "M3LPG_vs_M3L_Non_Hip")
+addWorksheet(wb, "M3LPG_vs_M3LPE_Non_Hip")
+
+# Write the data frame to the worksheet
+writeData(wb, "M3L_vs_M3C_Non_Hip", res1, colNames = TRUE)
+writeData(wb, "M3LPE_vs_M3L_Non_Hip", res2, colNames = TRUE)
+writeData(wb, "M3LPG_vs_M3L_Non_Hip", res3, colNames = TRUE)
+writeData(wb, "M3LPG_vs_M3LPE_Non_Hip", res4, colNames = TRUE)
+
+# Save the workbook to a file
+saveWorkbook(wb, paste0("../report/results/diff_results_M3_Non_hip_",format(Sys.Date(),"%m%d"),".xlsx"), overwrite = TRUE)
+
+```
+
+
+
+
